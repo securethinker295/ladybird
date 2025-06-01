@@ -1,0 +1,86 @@
+name: Manual Linux Release Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type (Release/Debug)'
+        required: true
+        default: 'Release'
+        type: choice
+        options:
+        - Release
+        - Debug
+      create_release:
+        description: 'Create GitHub release'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y autoconf autoconf-archive automake build-essential ccache cmake curl fonts-liberation2 git libgl1-mesa-dev nasm ninja-build pkg-config qt6-base-dev qt6-tools-dev-tools qt6-wayland tar unzip zip libpulse-dev
+        
+    - name: Install modern CMake
+      run: |
+        wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+        echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/kitware.list
+        sudo apt update && sudo apt install cmake
+        
+    - name: Install Clang 20
+      run: |
+        sudo wget -O /usr/share/keyrings/llvm-snapshot.gpg.key https://apt.llvm.org/llvm-snapshot.gpg.key
+        echo "deb [signed-by=/usr/share/keyrings/llvm-snapshot.gpg.key] https://apt.llvm.org/$(lsb_release -sc)/ llvm-toolchain-$(lsb_release -sc)-20 main" | sudo tee -a /etc/apt/sources.list.d/llvm.list
+        sudo apt update && sudo apt install clang-20 clangd-20 clang-tools-20 clang-format-20 clang-tidy-20 lld-20
+        
+    - name: Build Ladybird
+      run: |
+        export CC=clang-20
+        export CXX=clang++-20
+        if [ "${{ github.event.inputs.build_type }}" = "Debug" ]; then
+          BUILD_PRESET=Debug ./Meta/ladybird.py build
+        else
+          ./Meta/ladybird.py build
+        fi
+        
+    - name: Create release package
+      run: |
+        cd Build/release
+        tar -czf ../../ladybird-linux-x86_64.tar.gz bin/ lib/ share/
+        
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ladybird-linux-${{ github.event.inputs.build_type }}
+        path: ladybird-linux-x86_64.tar.gz
+        
+    - name: Create GitHub Release
+      if: ${{ github.event.inputs.create_release == 'true' }}
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: release-${{ github.run_number }}
+        release_name: Ladybird Linux Release ${{ github.run_number }}
+        draft: false
+        prerelease: false
+        
+    - name: Upload Release Asset
+      if: ${{ github.event.inputs.create_release == 'true' }}
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./ladybird-linux-x86_64.tar.gz
+        asset_name: ladybird-linux-x86_64.tar.gz
+        asset_content_type: application/gzip
